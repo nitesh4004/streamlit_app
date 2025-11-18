@@ -15,7 +15,7 @@ import numpy as np
 
 # --- 1. PAGE CONFIG ---
 st.set_page_config(
-    page_title="Geospatial Ni30", 
+    page_title="Geospatial Ni30 by Nitesh", 
     page_icon="🌍", 
     layout="wide",
     initial_sidebar_state="expanded"
@@ -426,3 +426,4 @@ else:
             m.addLayer(final_img, vis, f"{p['idx']} ({sel_date})")
             m.add_colorbar(vis, label=p['idx'])
             m.to_streamlit()
+
