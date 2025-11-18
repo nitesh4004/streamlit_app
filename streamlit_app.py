@@ -26,7 +26,7 @@ st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
     
-    /* FORCE BROWSER DARK MODE FOR NATIVE CONTROLS */
+    /* FORCE BROWSER DARK MODE FOR NATIVE CONTROLS (Scrollbars, Datepickers) */
     :root {
         color-scheme: dark;
     }
@@ -45,7 +45,7 @@ st.markdown("""
         border-right: 1px solid #334155;
     }
     
-    /* Text Colors */
+    /* Text Colors - Force White/Light Grey */
     h1, h2, h3, h4, h5, h6, p, span, label, .stMarkdown, .stText {
         color: #f8fafc !important;
     }
@@ -66,7 +66,7 @@ st.markdown("""
         color: #ffffff !important;
     }
     
-    /* SVG Icons */
+    /* SVG Icons (often black by default in light mode) */
     svg { fill: #ffffff !important; }
     
     /* Custom Cards */
@@ -125,14 +125,20 @@ st.markdown("""
         color: #f8fafc !important;
         border: 1px solid #334155;
     }
-
-    /* Scrollbar */
-    ::-webkit-scrollbar { width: 10px; background: #0f172a; }
-    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 5px; }
+    
+    /* Scrollbar Customization (Webkit) */
+    ::-webkit-scrollbar {
+        width: 10px;
+        background: #0f172a;
+    }
+    ::-webkit-scrollbar-thumb {
+        background: #334155;
+        border-radius: 5px;
+    }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. AUTHENTICATION ---
+# --- 3. AUTHENTICATION (FIXED) ---
 try:
     service_account = st.secrets["gcp_service_account"]["client_email"]
     secret_dict = dict(st.secrets["gcp_service_account"])
@@ -168,6 +174,7 @@ def process_coords(text):
     coords = [[float(x.split(',')[0]), float(x.split(',')[1])] for x in raw if len(x.split(',')) >= 2]
     return ee.Geometry.Polygon([coords]) if len(coords) > 2 else None
 
+# NOTE: Removed @st.cache_data here because ee.Image is not hashable
 def compute_index(img, platform, index, formula=None):
     if platform == "Sentinel-2 (Optical)":
         if index == '🛠️ Custom (Band Math)':
@@ -198,6 +205,7 @@ def generate_static_map_display(image, roi, vis_params, title, cmap_colors):
     deg_to_m = 111320 * np.cos(np.radians(center_lat))
     width_m = (max_lon - min_lon) * deg_to_m
     
+    # --- Dark Mode Plot ---
     fig, ax = plt.subplots(figsize=(8, 8), dpi=80, facecolor='#1e293b')
     ax.set_facecolor('#1e293b')
     
@@ -302,11 +310,14 @@ with st.sidebar:
     }
     cur_palette = pal_map.get(pal_name, pal_map["Red-Yellow-Green"])
 
-    # --- REVISED TIME SECTION (REMOVED SINGLE DATE) ---
-    with st.expander("📅 Time Range", expanded=True):
-        st.caption("Select the analysis period:")
-        start = st.date_input("Start Date", datetime.now()-timedelta(60)).strftime("%Y-%m-%d")
-        end = st.date_input("End Date", datetime.now()).strftime("%Y-%m-%d")
+    with st.expander("📅 Time", expanded=True):
+        mode = st.radio("Mode", ["Single", "Series"])
+        if mode == "Single":
+            d = st.date_input("Date", datetime.now()-timedelta(10))
+            start, end = d.strftime("%Y-%m-%d"), (d+timedelta(1)).strftime("%Y-%m-%d")
+        else:
+            start = st.date_input("Start", datetime.now()-timedelta(60)).strftime("%Y-%m-%d")
+            end = st.date_input("End", datetime.now()).strftime("%Y-%m-%d")
 
     st.markdown("###")
     if st.button("🚀 Calculate", type="primary"):
@@ -331,15 +342,21 @@ st.markdown("""
 # --- ABOUT SECTION ---
 with st.expander("ℹ️ About Geospatial Ni30 - Real-time Satellite Analytics"):
     st.markdown("""
-    **Geospatial Ni30** is a powerful web application built with Streamlit and Google Earth Engine (GEE) that allows users to perform real-time satellite analysis without writing code. It supports both Optical (Sentinel-2) and Radar (Sentinel-1) data.
+    **Geospatial Ni30** is a powerful web application built with Streamlit and Google Earth Engine (GEE) that allows users to perform real-time satellite analysis without writing code. It supports both Optical (Sentinel-2) and Radar (Sentinel-1) data for monitoring vegetation health, water bodies, and land changes.
     
     ### 🚀 Features
     * **Multi-Sensor Support**: Switch between Sentinel-2 (Optical) and Sentinel-1 (SAR/Radar).
     * **Spectral Indices**: Calculate NDVI, GNDVI, NDWI (Water), and NDMI instantly.
-    * **Custom Band Math**: Write your own formulas.
-    * **Flexible ROI**: Upload KML, Point & Buffer, or Manual Coordinates.
-    * **Time-Series Analysis**: View available satellite imagery over a date range.
-    * **Export Capabilities**: Download GeoTIFF, Save to Drive, or Generate JPG Map.
+    * **Custom Band Math**: Write your own formulas (e.g., `(B8-B4)/(B8+B4)`).
+    * **Flexible ROI**: Define your Region of Interest via:
+        * 📍 Upload KML/KMZ
+        * 🎯 Point & Buffer (Radius in km)
+        * 🗺️ Manual Coordinate Bounding Box
+    * **Time-Series Analysis**: Process single dates or generate median composites over time ranges.
+    * **Export Capabilities**:
+        * Direct GeoTIFF Download URL.
+        * Export to Google Drive.
+        * Generate high-quality JPG maps with scale bars and legends.
     """)
 
 if not st.session_state['calculated']:
@@ -373,7 +390,7 @@ else:
                     lambda t: ee.Date(t).format('YYYY-MM-dd')).distinct().sort()
                 st.session_state['dates'] = dates_list.slice(0, 50).getInfo()
             else:
-                st.warning(f"No images found between {p['start']} and {p['end']}.")
+                st.warning("No images found.")
                 st.session_state['calculated'] = False
 
     if st.session_state['dates']:
@@ -384,9 +401,12 @@ else:
             st.markdown('<div class="control-card">', unsafe_allow_html=True)
             st.markdown('<div class="card-header">📅 Select Date</div>', unsafe_allow_html=True)
             
-            # Only one mode now: Select from list
-            sel_date = st.selectbox("Available Images", dates, index=len(dates)-1, label_visibility="collapsed")
-            
+            if mode == "Series":
+                sel_date = st.selectbox("Available Images", dates, index=len(dates)-1, label_visibility="collapsed")
+            else:
+                sel_date = p['start']
+                st.info(f"Single Date: {sel_date}")
+                
             st.markdown(f"<div style='font-size:0.8rem; color:#94a3b8; margin-top:5px;'>{len(dates)} available</div>", unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
 
