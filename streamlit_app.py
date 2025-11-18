@@ -60,12 +60,17 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. AUTHENTICATION (The Fix) ---
+# --- 3. AUTHENTICATION (FIXED) ---
 try:
-    # Try to get credentials from Streamlit Secrets (Cloud Mode)
+    # 1. Fetch the secrets
     service_account = st.secrets["gcp_service_account"]["client_email"]
-    key_data = st.secrets["gcp_service_account"]
     
+    # 2. THE FIX: Convert the secret object back into a JSON string
+    # Streamlit gives us an 'AttrDict', but Earth Engine wants a 'String'
+    secret_dict = dict(st.secrets["gcp_service_account"])
+    key_data = json.dumps(secret_dict) 
+    
+    # 3. Authenticate using the string
     credentials = ee.ServiceAccountCredentials(
         service_account, 
         key_data=key_data
@@ -360,4 +365,3 @@ else:
             m.addLayer(final_img, vis, f"{p['idx']} ({sel_date})")
             m.add_colorbar(vis, label=p['idx'])
             m.to_streamlit()
-
