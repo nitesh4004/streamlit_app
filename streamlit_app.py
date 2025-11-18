@@ -170,9 +170,7 @@ def process_coords(text):
 
 def compute_index(img, platform, index, formula=None):
     if platform == "Sentinel-2 (Optical)":
-        # 1. Custom Band Math
         if index == '🛠️ Custom (Band Math)':
-            # Added more bands (Red Edge, etc) for advanced custom formulas
             map_b = {
                 'B1':img.select('B1'), 'B2':img.select('B2'), 'B3':img.select('B3'), 'B4':img.select('B4'), 
                 'B5':img.select('B5'), 'B6':img.select('B6'), 'B7':img.select('B7'),
@@ -181,12 +179,7 @@ def compute_index(img, platform, index, formula=None):
             }
             return img.expression(formula, map_b).rename('Custom')
         
-        # 2. RVI (Simple Ratio, not normalized)
-        if index == 'RVI':
-            # RVI = NIR / RED
-            return img.select('B8').divide(img.select('B4')).rename('RVI')
-
-        # 3. Normalized Indices
+        # Standard Optical Indices
         map_i = {
             'NDVI': ['B8','B4'], 
             'GNDVI': ['B8','B3'], 
@@ -197,9 +190,25 @@ def compute_index(img, platform, index, formula=None):
             return img.normalizedDifference(map_i[index]).rename(index.split()[0])
 
     elif platform == "Sentinel-1 (Radar)":
+        # Sentinel-1 Custom Band Math
+        if index == '🛠️ Custom (Band Math)':
+            map_b = {'VV': img.select('VV'), 'VH': img.select('VH')}
+            return img.expression(formula, map_b).rename('Custom')
+
+        # Radar Vegetation Index (RVI)
+        # Formula: 4 * VH / (VV + VH)
+        # Note: This relies on linear power units (sigma0), not dB.
+        if index == 'RVI (Radar)':
+            # We explicitly select bands. S1 GRD is usually raw/linear in GEE unless converted.
+            return img.expression(
+                '4 * VH / (VV + VH)', 
+                {'VV': img.select('VV'), 'VH': img.select('VH')}
+            ).rename('RVI')
+
+        # Standard Polarizations
         if index == 'VV': return img.select('VV')
         if index == 'VH': return img.select('VH')
-        if index == 'VH/VV Ratio': return img.select('VH').subtract(img.select('VV')).rename('Ratio')
+        if index == 'VH/VV Ratio': return img.select('VH').subtract(img.select('VV')).rename('Ratio') # This is for dB
     
     return img.select(0)
 
@@ -295,19 +304,12 @@ with st.sidebar:
         platform = st.selectbox("Satellite", ["Sentinel-2 (Optical)", "Sentinel-1 (Radar)"])
         
         if platform == "Sentinel-2 (Optical)":
-            # Added RVI to the list
-            idx = st.selectbox("Index", ['NDVI', 'GNDVI', 'RVI', 'NDWI (Water)', 'NDMI', '🛠️ Custom (Band Math)'])
+            idx = st.selectbox("Index", ['NDVI', 'GNDVI', 'NDWI (Water)', 'NDMI', '🛠️ Custom (Band Math)'])
             
-            # Dynamic Defaults based on selection
             if 'Custom' in idx:
                 formula = st.text_input("Formula (e.g. B8/B4)", "(B8-B4)/(B8+B4)")
                 default_min, default_max = 0.0, 1.0
                 pal_name = "Viridis"
-            elif 'RVI' in idx:
-                formula = ""
-                # RVI goes from 0 to infinity, usually healthy veg is 2-8
-                default_min, default_max = 0.0, 10.0 
-                pal_name = "Red-Yellow-Green"
             elif 'Water' in idx:
                 formula = ""
                 default_min, default_max = -0.5, 0.5
@@ -325,12 +327,34 @@ with st.sidebar:
             orbit = None
             
         else:
-            idx = st.selectbox("Pol", ['VV', 'VH', 'VH/VV Ratio'])
-            vmin, vmax = -25, -5
-            pal_name = "Greyscale"
+            # Sentinel-1 Options
+            idx = st.selectbox("Index", ['RVI (Radar)', 'VV', 'VH', 'VH/VV Ratio', '🛠️ Custom (Band Math)'])
+            
+            if 'Custom' in idx:
+                formula = st.text_input("Formula (e.g., VH/VV)", "VH/VV")
+                default_min, default_max = 0.0, 1.0
+                pal_name = "Viridis"
+            elif 'RVI' in idx:
+                formula = ""
+                # Radar Vegetation Index usually ranges from 0 to 1
+                default_min, default_max = 0.0, 1.0
+                pal_name = "Red-Yellow-Green"
+            elif 'Ratio' in idx:
+                formula = ""
+                default_min, default_max = -20.0, 0.0
+                pal_name = "Magma"
+            else:
+                formula = ""
+                default_min, default_max = -25.0, -5.0
+                pal_name = "Greyscale"
+
+            c1, c2 = st.columns(2)
+            vmin = c1.number_input("Min", value=default_min)
+            vmax = c2.number_input("Max", value=default_max)
+            pal_name = st.selectbox("Palette", ["Red-Yellow-Green", "Blue-White-Green", "Magma", "Viridis", "Greyscale"], index=["Red-Yellow-Green", "Blue-White-Green", "Magma", "Viridis", "Greyscale"].index(pal_name))
+            
             orbit = st.radio("Orbit", ["DESCENDING", "ASCENDING", "BOTH"])
             cloud = 0
-            formula = ""
 
     pal_map = {
         "Red-Yellow-Green": ['#d7191c', '#fdae61', '#ffffbf', '#a6d96a', '#1a9641'],
@@ -374,11 +398,12 @@ with st.expander("ℹ️ About Geospatial Ni30 - Real-time Satellite Analytics")
     ### 🚀 Features
     * **Multi-Sensor Support**: Switch between Sentinel-2 (Optical) and Sentinel-1 (SAR/Radar).
     * **Spectral Indices**: 
-        * Standard: NDVI, GNDVI, NDWI, NDMI.
-        * **New:** RVI (Ratio Vegetation Index).
-    * **Custom Band Math**: Create custom formulas using B1-B12 (e.g., `(B8-B4)/(B8+B4)`).
+        * Optical: NDVI, GNDVI, NDWI, NDMI.
+        * **Radar**: RVI (Radar Vegetation Index), VV, VH, VH/VV Ratio.
+    * **Custom Band Math**: 
+        * Sentinel-2: `(B8-B4)/(B8+B4)`
+        * Sentinel-1: `VH/VV`, `(4*VH)/(VV+VH)`
     * **Flexible ROI**: Upload KML, Point & Buffer, or Manual Coordinates.
-    * **Time-Series Analysis**: View available satellite imagery over a date range.
     * **Export Capabilities**: Download GeoTIFF, Save to Drive, or Generate JPG Map.
     """)
 
@@ -399,10 +424,15 @@ else:
                    .filterBounds(roi).filterDate(p['start'], p['end'])
                    .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', p['cloud'])))
         else:
+            # For Sentinel-1, we usually need both VV and VH for RVI
+            # So we ensure the list contains 'VV'. We also hope it contains 'VH' (usually IW mode has both).
             col = (ee.ImageCollection('COPERNICUS/S1_GRD')
                    .filterBounds(roi).filterDate(p['start'], p['end'])
                    .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV')))
-            if p['orbit'] != "BOTH": col = col.filter(ee.Filter.eq('orbitProperties_pass', p['orbit']))
+            
+            # S1 Orbit Filter
+            if p['orbit'] != "BOTH": 
+                col = col.filter(ee.Filter.eq('orbitProperties_pass', p['orbit']))
 
         processed = col.map(lambda img: img.addBands(compute_index(img, p['platform'], p['idx'], p['formula'])))
         
@@ -433,6 +463,7 @@ else:
             d_e = (datetime.strptime(sel_date, "%Y-%m-%d") + timedelta(1)).strftime("%Y-%m-%d")
             band = 'Custom' if 'Custom' in p['idx'] else p['idx'].split()[0]
             if 'Ratio' in p['idx']: band = 'Ratio'
+            if 'RVI' in p['idx']: band = 'RVI'
             
             final_img = processed.filterDate(d_s, d_e).select(band).median().clip(roi)
             vis = {'min': p['vmin'], 'max': p['vmax'], 'palette': p['palette']}
