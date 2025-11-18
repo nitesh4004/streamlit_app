@@ -58,4 +58,9 @@ earthengine-api
 matplotlib
 numpy
 requests
+
 Pillow
+streamlit
+earthengine-api
+geemap
+plotly
