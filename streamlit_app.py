@@ -195,16 +195,6 @@ def compute_index(img, platform, index, formula=None):
             map_b = {'VV': img.select('VV'), 'VH': img.select('VH')}
             return img.expression(formula, map_b).rename('Custom')
 
-        # Radar Vegetation Index (RVI)
-        # Formula: 4 * VH / (VV + VH)
-        # Note: This relies on linear power units (sigma0), not dB.
-        if index == 'RVI (Radar)':
-            # We explicitly select bands. S1 GRD is usually raw/linear in GEE unless converted.
-            return img.expression(
-                '4 * VH / (VV + VH)', 
-                {'VV': img.select('VV'), 'VH': img.select('VH')}
-            ).rename('RVI')
-
         # Standard Polarizations
         if index == 'VV': return img.select('VV')
         if index == 'VH': return img.select('VH')
@@ -328,17 +318,13 @@ with st.sidebar:
             
         else:
             # Sentinel-1 Options
-            idx = st.selectbox("Index", ['RVI (Radar)', 'VV', 'VH', 'VH/VV Ratio', '🛠️ Custom (Band Math)'])
+            # Removed RVI from list below
+            idx = st.selectbox("Index", ['VV', 'VH', 'VH/VV Ratio', '🛠️ Custom (Band Math)'])
             
             if 'Custom' in idx:
                 formula = st.text_input("Formula (e.g., VH/VV)", "VH/VV")
                 default_min, default_max = 0.0, 1.0
                 pal_name = "Viridis"
-            elif 'RVI' in idx:
-                formula = ""
-                # Radar Vegetation Index usually ranges from 0 to 1
-                default_min, default_max = 0.0, 1.0
-                pal_name = "Red-Yellow-Green"
             elif 'Ratio' in idx:
                 formula = ""
                 default_min, default_max = -20.0, 0.0
@@ -399,7 +385,7 @@ with st.expander("ℹ️ About Geospatial Ni30 - Real-time Satellite Analytics")
     * **Multi-Sensor Support**: Switch between Sentinel-2 (Optical) and Sentinel-1 (SAR/Radar).
     * **Spectral Indices**: 
         * Optical: NDVI, GNDVI, NDWI, NDMI.
-        * **Radar**: RVI (Radar Vegetation Index), VV, VH, VH/VV Ratio.
+        * **Radar**: VV, VH, VH/VV Ratio.
     * **Custom Band Math**: 
         * Sentinel-2: `(B8-B4)/(B8+B4)`
         * Sentinel-1: `VH/VV`, `(4*VH)/(VV+VH)`
@@ -463,7 +449,6 @@ else:
             d_e = (datetime.strptime(sel_date, "%Y-%m-%d") + timedelta(1)).strftime("%Y-%m-%d")
             band = 'Custom' if 'Custom' in p['idx'] else p['idx'].split()[0]
             if 'Ratio' in p['idx']: band = 'Ratio'
-            if 'RVI' in p['idx']: band = 'RVI'
             
             final_img = processed.filterDate(d_s, d_e).select(band).median().clip(roi)
             vis = {'min': p['vmin'], 'max': p['vmax'], 'palette': p['palette']}
