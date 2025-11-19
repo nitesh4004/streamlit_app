@@ -21,40 +21,112 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- 2. CSS STYLING ---
+# --- 2. CSS STYLING (STRICT DARK MODE ENFORCEMENT) ---
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
-    :root { color-scheme: dark; }
-    html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
-    .stApp { background-color: #0f172a; color: #f8fafc; }
-    section[data-testid="stSidebar"] { background-color: #1e293b; border-right: 1px solid #334155; }
-    h1, h2, h3, h4, h5, h6, p, span, label, .stMarkdown, .stText { color: #f8fafc !important; }
-    .stTextInput > div > div, .stNumberInput > div > div, .stSelectbox > div > div, .stDateInput > div > div {
-        background-color: #334155 !important; color: #ffffff !important; border: 1px solid #475569 !important;
+    
+    /* FORCE BROWSER DARK MODE FOR NATIVE CONTROLS */
+    :root {
+        color-scheme: dark;
     }
-    div[data-baseweb="select"] > div { background-color: #334155 !important; color: #ffffff !important; }
+
+    html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+    
+    /* Main App Background */
+    .stApp { 
+        background-color: #0f172a; 
+        color: #f8fafc; 
+    }
+    
+    /* Sidebar Background */
+    section[data-testid="stSidebar"] { 
+        background-color: #1e293b; 
+        border-right: 1px solid #334155;
+    }
+    
+    /* Text Colors */
+    h1, h2, h3, h4, h5, h6, p, span, label, .stMarkdown, .stText {
+        color: #f8fafc !important;
+    }
+    
+    /* Input Fields & Widgets */
+    .stTextInput > div > div, 
+    .stNumberInput > div > div, 
+    .stSelectbox > div > div, 
+    .stDateInput > div > div {
+        background-color: #334155 !important;
+        color: #ffffff !important;
+        border: 1px solid #475569 !important;
+    }
+    
+    /* Dropdown Menu Items */
+    div[data-baseweb="select"] > div {
+        background-color: #334155 !important;
+        color: #ffffff !important;
+    }
+    
+    /* SVG Icons */
     svg { fill: #ffffff !important; }
+    
+    /* Custom Cards */
     .control-card {
-        background: #1e293b; padding: 15px; border-radius: 8px;
-        border: 1px solid #334155; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5); margin-bottom: 15px;
+        background: #1e293b; 
+        padding: 15px; 
+        border-radius: 8px;
+        border: 1px solid #334155; 
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5); 
+        margin-bottom: 15px;
     }
     .card-header {
-        font-size: 0.75rem; text-transform: uppercase; font-weight: 700;
-        color: #94a3b8 !important; margin-bottom: 8px; border-bottom: 1px solid #334155; padding-bottom: 5px;
+        font-size: 0.75rem; 
+        text-transform: uppercase; 
+        font-weight: 700;
+        color: #94a3b8 !important; 
+        margin-bottom: 8px; 
+        border-bottom: 1px solid #334155; 
+        padding-bottom: 5px;
     }
+    
+    /* Navbar */
     .navbar {
-        background: #1e293b; padding: 0.8rem 1.5rem; border-radius: 10px;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5); margin-bottom: 20px; 
-        border: 1px solid #334155; display: flex; justify-content: space-between; align-items: center;
+        background: #1e293b; 
+        padding: 0.8rem 1.5rem; 
+        border-radius: 10px;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5); 
+        margin-bottom: 20px; 
+        border: 1px solid #334155; 
+        display: flex; 
+        justify-content: space-between;
+        align-items: center;
     }
-    .navbar-title { font-size: 1.2rem; font-weight: 700; color: #f8fafc; }
+    .navbar-title { 
+        font-size: 1.2rem; 
+        font-weight: 700; 
+        color: #f8fafc; 
+    }
+    
+    /* Buttons */
     div.stButton > button:first-child {
-        background-color: #3b82f6; color: white !important; border-radius: 6px; border: none;
-        padding: 0.5rem; font-weight: 600; width: 100%; transition: background-color 0.2s;
+        background-color: #3b82f6; 
+        color: white !important; 
+        border-radius: 6px; 
+        border: none;
+        padding: 0.5rem; 
+        font-weight: 600; 
+        width: 100%;
+        transition: background-color 0.2s;
     }
     div.stButton > button:first-child:hover { background-color: #2563eb; }
-    div[data-testid="stToast"] { background-color: #1e293b !important; color: #f8fafc !important; border: 1px solid #334155; }
+    
+    /* Toast Notification */
+    div[data-testid="stToast"] {
+        background-color: #1e293b !important;
+        color: #f8fafc !important;
+        border: 1px solid #334155;
+    }
+
+    /* Scrollbar */
     ::-webkit-scrollbar { width: 10px; background: #0f172a; }
     ::-webkit-scrollbar-thumb { background: #334155; border-radius: 5px; }
     </style>
@@ -97,26 +169,21 @@ def process_coords(text):
     return ee.Geometry.Polygon([coords]) if len(coords) > 2 else None
 
 def preprocess_landsat(img):
-    """Scales Landsat Collection 2 to Reflectance/Kelvin."""
-    # Optical: 0.0000275 + -0.2
+    """Scales Landsat Collection 2 to Surface Reflectance (0-1)."""
+    # Scale factors for Collection 2
     opticalBands = img.select('SR_B.').multiply(0.0000275).add(-0.2)
-    # Thermal: 0.00341802 + 149.0 (Result is Kelvin)
     thermalBands = img.select('ST_B.*').multiply(0.00341802).add(149.0)
+    
+    # Replace original bands with scaled bands and return
     return img.addBands(opticalBands, None, True).addBands(thermalBands, None, True)
 
 def rename_landsat_bands(img):
-    """Renames SR_B* to B* and ST_B10 to Thermal."""
-    # Map standard optical bands
-    img = img.select(
+    """Renames SR_B* to B* for Landsat 8 and 9."""
+    # L8/9: SR_B1=Coastal, SR_B2=Blue, SR_B3=Green, SR_B4=Red, SR_B5=NIR, SR_B6=SWIR1, SR_B7=SWIR2
+    return img.select(
         ['SR_B1', 'SR_B2', 'SR_B3', 'SR_B4', 'SR_B5', 'SR_B6', 'SR_B7'],
         ['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7']
     )
-    # Check if ST_B10 exists (Thermal) and rename it
-    bands = img.bandNames()
-    # We use a trick to rename ST_B10 only if it exists, 
-    # but since we are using L2 collections, it always exists.
-    img = img.addBands(img.select(['ST_B10'], ['Thermal']))
-    return img
 
 def compute_index(img, platform, index, formula=None):
     if platform == "Sentinel-2 (Optical)":
@@ -124,32 +191,40 @@ def compute_index(img, platform, index, formula=None):
             map_b = {
                 'B1':img.select('B1'), 'B2':img.select('B2'), 'B3':img.select('B3'), 'B4':img.select('B4'), 
                 'B5':img.select('B5'), 'B6':img.select('B6'), 'B7':img.select('B7'),
-                'B8':img.select('B8'), 'B8A':img.select('B8A'), 'B11':img.select('B11'), 'B12':img.select('B12')
+                'B8':img.select('B8'), 'B8A':img.select('B8A'), 
+                'B11':img.select('B11'), 'B12':img.select('B12')
             }
             return img.expression(formula, map_b).rename('Custom')
         
-        map_i = {'NDVI': ['B8','B4'], 'GNDVI': ['B8','B3'], 'NDWI (Water)': ['B3','B8'], 'NDMI': ['B8','B11']}
+        map_i = {
+            'NDVI': ['B8','B4'], 
+            'GNDVI': ['B8','B3'], 
+            'NDWI (Water)': ['B3','B8'], 
+            'NDMI': ['B8','B11']
+        }
         if index in map_i: 
             return img.normalizedDifference(map_i[index]).rename(index.split()[0])
 
     elif "Landsat" in platform:
-        # Bands: B1-B7 (Optical), Thermal (Kelvin)
-        if index == 'LST (Celsius)':
-            # Convert Kelvin to Celsius
-            return img.select('Thermal').subtract(273.15).rename('LST')
-
+        # Bands have been renamed to B1, B2... by rename_landsat_bands function
+        # Landsat 8 and 9 share the same band designations
+        
         if index == '🛠️ Custom (Band Math)':
             map_b = {
                 'B1': img.select('B1'), 'B2': img.select('B2'), 'B3': img.select('B3'),
                 'B4': img.select('B4'), 'B5': img.select('B5'), 'B6': img.select('B6'),
-                'B7': img.select('B7'), 'Thermal': img.select('Thermal')
+                'B7': img.select('B7')
             }
             return img.expression(formula, map_b).rename('Custom')
 
+        # Standard Indices for Landsat 8/9
         map_i = {
-            'NDVI': ['B5','B4'], 'GNDVI': ['B5','B3'], 
-            'NDWI (Water)': ['B3','B5'], 'NDMI': ['B5','B6']
+            'NDVI': ['B5','B4'],   # NIR, Red
+            'GNDVI': ['B5','B3'],  # NIR, Green
+            'NDWI (Water)': ['B3','B5'], # Green, NIR (McFeeters)
+            'NDMI': ['B5','B6']    # NIR, SWIR1
         }
+            
         if index in map_i:
             return img.normalizedDifference(map_i[index]).rename(index.split()[0])
 
@@ -157,6 +232,7 @@ def compute_index(img, platform, index, formula=None):
         if index == '🛠️ Custom (Band Math)':
             map_b = {'VV': img.select('VV'), 'VH': img.select('VH')}
             return img.expression(formula, map_b).rename('Custom')
+
         if index == 'VV': return img.select('VV')
         if index == 'VH': return img.select('VH')
         if index == 'VH/VV Ratio': return img.select('VH').subtract(img.select('VV')).rename('Ratio')
@@ -181,6 +257,7 @@ def generate_static_map_display(image, roi, vis_params, title, cmap_colors):
     
     fig, ax = plt.subplots(figsize=(8, 8), dpi=80, facecolor='#1e293b')
     ax.set_facecolor('#1e293b')
+    
     ax.imshow(img_pil)
     ax.axis('off')
     ax.set_title(title, fontsize=12, fontweight='bold', pad=10, color='#f8fafc')
@@ -190,16 +267,22 @@ def generate_static_map_display(image, roi, vis_params, title, cmap_colors):
     scale_bar_m = width_m * 0.2
     scale_text = f"{scale_bar_m/1000:.1f} km" if scale_bar_m > 1000 else f"{int(scale_bar_m)} m"
     bar_x, bar_y = img_w_px * 0.05, img_pil.height * 0.95
+    
     ax.add_patch(Rectangle((bar_x, bar_y - 5), scale_bar_px, 10, color='white'))
     ax.add_patch(Rectangle((bar_x, bar_y - 2), scale_bar_px, 4, color='black'))
-    ax.text(bar_x + scale_bar_px/2, bar_y - 15, scale_text, ha='center', color='#f8fafc', fontsize=10, weight='bold', bbox=dict(facecolor='#0f172a', alpha=0.8, edgecolor='none', pad=2))
+    
+    ax.text(bar_x + scale_bar_px/2, bar_y - 15, scale_text, ha='center', 
+            color='#f8fafc', fontsize=10, weight='bold', 
+            bbox=dict(facecolor='#0f172a', alpha=0.8, edgecolor='none', pad=2))
 
     cmap = mcolors.LinearSegmentedColormap.from_list("custom", cmap_colors)
     norm = mcolors.Normalize(vmin=vis_params['min'], vmax=vis_params['max'])
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
+    
     cax = fig.add_axes([0.92, 0.15, 0.03, 0.7])
     cbar = plt.colorbar(sm, cax=cax)
+    
     cbar.set_label('Index Value', fontsize=10, color='#f8fafc')
     cbar.ax.yaxis.set_tick_params(color='#f8fafc')
     plt.setp(plt.getp(cbar.ax.axes, 'yticklabels'), color='#f8fafc')
@@ -255,15 +338,11 @@ with st.sidebar:
         is_optical = "Optical" in platform
         
         if is_optical:
-            opts = ['NDVI', 'GNDVI', 'NDWI (Water)', 'NDMI', '🛠️ Custom (Band Math)']
-            if "Landsat" in platform:
-                opts.insert(4, 'LST (Celsius)') # Add LST option for Landsat
-                
-            idx = st.selectbox("Index", opts)
+            idx = st.selectbox("Index", ['NDVI', 'GNDVI', 'NDWI (Water)', 'NDMI', '🛠️ Custom (Band Math)'])
             
             if 'Custom' in idx:
                 if "Landsat" in platform:
-                    hint = "Hint: B2=Blue, B3=Green, B4=Red, B5=NIR, Thermal"
+                    hint = "Hint: B2=Blue, B3=Green, B4=Red, B5=NIR"
                     def_form = "(B5-B4)/(B5+B4)"
                 else: # Sentinel 2
                     hint = "Hint: B2=Blue, B3=Green, B4=Red, B8=NIR"
@@ -277,10 +356,6 @@ with st.sidebar:
                 formula = ""
                 default_min, default_max = -0.5, 0.5
                 pal_name = "Blue-White-Green"
-            elif 'LST' in idx:
-                formula = ""
-                default_min, default_max = 20.0, 45.0 # Typical C temp
-                pal_name = "Magma"
             else:
                 formula = ""
                 default_min, default_max = 0.0, 0.8
@@ -360,13 +435,15 @@ with st.expander("ℹ️ About Geospatial Ni30 - Real-time Satellite Analytics")
     ### 🚀 Features
     * **Multi-Sensor Support**: 
         * **Sentinel-2**: 10m High Res Optical.
-        * **Landsat 9 & 8**: 30m Optical + **Thermal (LST)**.
+        * **Landsat 9**: Latest generation (30m).
+        * **Landsat 8**: 30m Operational Land Imager.
         * **Sentinel-1**: All-weather SAR/Radar.
     * **Spectral Indices**: 
         * Optical: NDVI, GNDVI, NDWI, NDMI.
-        * **Thermal**: Land Surface Temperature (Celsius).
         * **Radar**: VV, VH, VH/VV Ratio.
     * **Custom Band Math**: Write your own formulas (e.g., `(B5-B4)/(B5+B4)`).
+    * **Flexible ROI**: Upload KML, Point & Buffer, or Manual Coordinates.
+    * **Export Capabilities**: Download GeoTIFF, Save to Drive, or Generate JPG Map.
     """)
 
 if not st.session_state['calculated']:
@@ -385,6 +462,7 @@ else:
             col = (ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
                    .filterBounds(roi).filterDate(p['start'], p['end'])
                    .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', p['cloud'])))
+            # Process bands
             processed = col.map(lambda img: img.addBands(compute_index(img, p['platform'], p['idx'], p['formula'])))
             
         elif "Landsat" in p['platform']:
@@ -394,6 +472,7 @@ else:
             else: # Landsat 8
                 col_raw = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
             
+            # Filter
             col = (col_raw.filterBounds(roi).filterDate(p['start'], p['end'])
                    .filter(ee.Filter.lt('CLOUD_COVER', p['cloud'])))
             
@@ -410,8 +489,10 @@ else:
             col = (ee.ImageCollection('COPERNICUS/S1_GRD')
                    .filterBounds(roi).filterDate(p['start'], p['end'])
                    .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV')))
+            
             if p['orbit'] != "BOTH": 
                 col = col.filter(ee.Filter.eq('orbitProperties_pass', p['orbit']))
+            
             processed = col.map(lambda img: img.addBands(compute_index(img, p['platform'], p['idx'], p['formula'])))
         
         if not st.session_state['dates']:
@@ -448,17 +529,14 @@ else:
             st.markdown('<div class="control-card">', unsafe_allow_html=True)
             st.markdown('<div class="card-header">📥 Exports</div>', unsafe_allow_html=True)
             try:
-                # Adjust scale: 30m for Landsat, 10m for S2/S1
-                scl = 30 if "Landsat" in p['platform'] else 10
-                url = final_img.getDownloadURL({'scale': scl, 'region': roi, 'name': f"{band}_{sel_date}"})
+                url = final_img.getDownloadURL({'scale': 30 if "Landsat" in p['platform'] else 10, 'region': roi, 'name': f"{band}_{sel_date}"})
                 st.markdown(f"🔗 [Download GeoTIFF]({url})", unsafe_allow_html=True)
             except: st.caption("Area too large for link.")
             
             st.markdown("---")
             if st.button("☁️ Save to Drive", use_container_width=True):
-                scl = 30 if "Landsat" in p['platform'] else 10
                 ee.batch.Export.image.toDrive(image=final_img, description=f"{band}_{sel_date}", 
-                                              scale=scl, region=roi, folder='GEE_Exports').start()
+                                              scale=30 if "Landsat" in p['platform'] else 10, region=roi, folder='GEE_Exports').start()
                 st.toast("Export Started")
                 
             st.markdown("---")
