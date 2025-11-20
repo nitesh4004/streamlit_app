@@ -240,7 +240,7 @@ def generate_static_map_display(image, roi, vis_params, title, cmap_colors):
     deg_to_m = 111320 * np.cos(np.radians(center_lat))
     width_m = (max_lon - min_lon) * deg_to_m
     
-    fig, ax = plt.subplots(figsize=(8, 8), dpi=300, facecolor='#050509')
+    fig, ax = plt.subplots(figsize=(8, 8), dpi=600, facecolor='#050509')
     ax.set_facecolor('#050509')
     ax.imshow(img_pil)
     ax.axis('off')
@@ -508,4 +508,5 @@ else:
             m.addLayer(final_img, vis, f"{p['idx']} ({sel_date})")
             m.add_colorbar(vis, label=p['idx'], layer_name="Legend")
             m.to_streamlit()
+
 
