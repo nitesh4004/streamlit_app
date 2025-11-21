@@ -680,3 +680,4 @@ else:
                 legend_dict = dict(zip(class_names, lulc_palette))
                 m.add_legend(title="LULC Classes", legend_dict=legend_dict)
                 m.to_streamlit()
+
