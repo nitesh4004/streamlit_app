@@ -537,7 +537,7 @@ else:
     elif p['mode'] == "LULC Classifier":
         
         # HARDCODED DATASET URL
-        DEFAULT_TRAIN_URL = "https://raw.githubusercontent.com/nitesh4004/Geospatial-Ni30/main/lulc_spectral_indices_30000.csv"
+        DEFAULT_TRAIN_URL = "https://raw.githubusercontent.com/nitesh4004/Geospatial-Ni30/main/lulc_spectral_indices_10000.csv"
         
         with st.spinner("🧠 Fetching Training Data & Initializing AI Model..."):
             # 1. LOAD TRAINING DATA AUTOMATICALLY
@@ -629,4 +629,5 @@ else:
                 legend_dict = dict(zip(class_names, lulc_palette))
                 m.add_legend(title="LULC Classes", legend_dict=legend_dict)
                 m.to_streamlit()
+
 
