@@ -7,11 +7,9 @@ import re
 import requests
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
-from matplotlib.patches import Rectangle
 from io import BytesIO
 from PIL import Image
 from datetime import datetime, timedelta
-import numpy as np
 import pandas as pd
 
 # --- 1. PAGE CONFIG ---
@@ -35,7 +33,6 @@ st.markdown("""
         --accent-primary: #00f2ff;
         --accent-secondary: #7000ff;
         --text-primary: #e2e8f0;
-        --text-secondary: #94a3b8;
     }
 
     /* BACKGROUND */
@@ -61,10 +58,8 @@ st.markdown("""
         border: 1px solid rgba(255, 255, 255, 0.1) !important;
         border-radius: 4px;
         color: #fff !important;
-        transition: all 0.3s ease;
     }
-    .stTextInput > div > div:focus-within { border-color: var(--accent-primary) !important; box-shadow: 0 0 10px rgba(0, 242, 255, 0.2); }
-
+    
     /* BUTTONS */
     div.stButton > button:first-child {
         background: linear-gradient(90deg, var(--accent-secondary) 0%, #4c1d95 100%);
@@ -74,14 +69,12 @@ st.markdown("""
         font-weight: 700;
         letter-spacing: 1px;
         padding: 0.6rem;
-        border-radius: 4px;
         transition: transform 0.2s, box-shadow 0.2s;
     }
     div.stButton > button:first-child:hover {
         transform: translateY(-2px);
         box-shadow: 0 4px 15px rgba(112, 0, 255, 0.4);
     }
-    div.stButton > button:first-child:active { transform: translateY(0); }
 
     /* CUSTOM HUD HEADER */
     .hud-header {
@@ -132,7 +125,7 @@ st.markdown("""
         border-bottom: 1px solid rgba(255,255,255,0.05);
         padding-bottom: 5px;
     }
-
+    
     /* MAP CONTAINER */
     iframe {
         border-radius: 10px;
@@ -144,15 +137,17 @@ st.markdown("""
 
 # --- 3. AUTHENTICATION ---
 try:
+    # Attempt to use Streamlit Secrets first
     service_account = st.secrets["gcp_service_account"]["client_email"]
     secret_dict = dict(st.secrets["gcp_service_account"])
     key_data = json.dumps(secret_dict) 
     credentials = ee.ServiceAccountCredentials(service_account, key_data=key_data)
     ee.Initialize(credentials)
-except Exception as e:
+except Exception:
+    # Fallback to local GEE auth
     try:
         ee.Initialize()
-    except Exception as e_inner:
+    except Exception as e:
         st.error(f"⚠️ Authentication Error: {e}")
         st.stop()
 
@@ -262,7 +257,6 @@ def generate_static_map_display(image, roi, vis_params, title, cmap_colors):
     ax.axis('off')
     ax.set_title(title, fontsize=14, fontweight='bold', pad=15, color='#00f2ff')
     
-    # Simplified colorbar logic for demo
     if cmap_colors:
         cmap = mcolors.LinearSegmentedColormap.from_list("custom", cmap_colors)
         norm = mcolors.Normalize(vmin=vis_params['min'], vmax=vis_params['max'])
@@ -327,9 +321,10 @@ with st.sidebar:
     st.markdown("---")
     
     # --- MODE SPECIFIC SETTINGS ---
-    # Initializing variables to avoid NameErrors
-    n_trees = 200
-    
+    # Init vars
+    rf_trees, svm_kernel, svm_gamma, gtb_trees = 100, 'RBF', 0.5, 100
+    model_choice = "Random Forest"
+
     if mode == "Spectral Monitor":
         st.markdown("### 2. Sensor Config")
         platform = st.selectbox("Satellite Network", [
@@ -385,14 +380,34 @@ with st.sidebar:
         }
         cur_palette = pal_map.get(pal_name, pal_map["Red-Yellow-Green"])
 
-    else: # LULC MODE
-        # AUTOMATIC DATA CONFIG - NO USER INPUT NEEDED
-        st.markdown("### 2. System Config")
-        st.info("🧠 Neural Net: Random Forest")
-        st.success("📁 Training Data: Auto-Loaded (Ni30_Repo)")
+    else: # LULC MODE (MODIFIED FOR MULTIPLE MODELS)
+        st.markdown("### 2. ML Architecture")
         
-        st.markdown("#### Model Tuning")
-        n_trees = st.slider("RF Trees", 50, 300, 200)
+        # 1. Model Selector
+        model_choice = st.selectbox(
+            "Select Classifier", 
+            ["Random Forest", "Support Vector Machine (SVM)", "Gradient Tree Boost", "CART (Decision Tree)", "Naive Bayes"]
+        )
+
+        # 2. Dynamic Hyperparameters
+        if model_choice == "Random Forest":
+            rf_trees = st.slider("Number of Trees", 10, 500, 150)
+        
+        elif model_choice == "Support Vector Machine (SVM)":
+            svm_kernel = st.selectbox("Kernel Type", ["RBF", "LINEAR", "POLY"])
+            svm_gamma = st.number_input("Gamma (RBF)", value=0.5)
+            st.caption("⚠️ SVM is computationally expensive on large areas.")
+
+        elif model_choice == "Gradient Tree Boost":
+            gtb_trees = st.slider("Trees (Iterations)", 10, 200, 100)
+            st.caption("High accuracy, slower training.")
+
+        elif model_choice == "CART (Decision Tree)":
+            st.caption("Simple decision tree. Fast but prone to overfitting.")
+            
+        elif model_choice == "Naive Bayes":
+            st.caption("Probabilistic classifier. Fast, good baseline.")
+
         cloud = st.slider("Cloud Masking %", 0, 30, 20)
 
     st.markdown("---")
@@ -409,7 +424,12 @@ with st.sidebar:
                 'start': start.strftime("%Y-%m-%d"), 
                 'end': end.strftime("%Y-%m-%d"),
                 'cloud': cloud,
-                'n_trees': n_trees # Pass this globally
+                # Pass all ML params regardless of selection (logic handled in main)
+                'model_choice': model_choice,
+                'rf_trees': rf_trees,
+                'svm_kernel': svm_kernel,
+                'svm_gamma': svm_gamma,
+                'gtb_trees': gtb_trees
             }
             
             if mode == "Spectral Monitor":
@@ -419,7 +439,7 @@ with st.sidebar:
                 })
                 
             st.session_state.update(params)
-            st.session_state['dates'] = [] # Reset dates for new calculation
+            st.session_state['dates'] = [] 
         else:
             st.error("❌ Error: ROI not defined.")
 
@@ -455,6 +475,8 @@ else:
     roi = st.session_state['roi']
     p = st.session_state
     
+    
+
     # ==========================================
     # MODE 1: SPECTRAL MONITOR
     # ==========================================
@@ -532,15 +554,15 @@ else:
                 m.to_streamlit()
 
     # ==========================================
-    # MODE 2: LULC CLASSIFIER (AUTO-GITHUB)
+    # MODE 2: MULTI-MODEL LULC CLASSIFIER
     # ==========================================
     elif p['mode'] == "LULC Classifier":
         
         # HARDCODED DATASET URL
         DEFAULT_TRAIN_URL = "https://raw.githubusercontent.com/nitesh4004/Geospatial-Ni30/main/lulc_spectral_indices_10000.csv"
         
-        with st.spinner("🧠 Fetching Training Data & Initializing AI Model..."):
-            # 1. LOAD TRAINING DATA AUTOMATICALLY
+        with st.spinner(f"🧠 Initializing {p['model_choice']} & Training..."):
+            # 1. LOAD TRAINING DATA
             try:
                 df = pd.read_csv(DEFAULT_TRAIN_URL)
                 
@@ -555,7 +577,7 @@ else:
                         df["class"] = df["LULC_Type"].map(class_lut)
                 df = df.dropna(subset=["class"])
                 
-                # Efficiently create features list
+                # Create Feature Collection
                 features = [ee.Feature(None, row.to_dict()) for i, row in df.iterrows()]
                 training_fc = ee.FeatureCollection(features)
                 
@@ -579,17 +601,41 @@ else:
             s2_median = s2_collection.median().clip(roi)
             indices_img = add_lulc_indices(s2_median)
 
-            # 3. TRAIN & CLASSIFY
+            # 3. INSTANTIATE SELECTED MODEL (THE UPGRADE)
             input_bands = ["NDVI", "EVI", "GNDVI", "NDWI", "NDMI"]
-            classifier = ee.Classifier.smileRandomForest(
-                numberOfTrees=p['n_trees'], seed=42
-            ).train(
+            
+            # Logic for Model Selection
+            if p['model_choice'] == "Random Forest":
+                classifier_inst = ee.Classifier.smileRandomForest(
+                    numberOfTrees=p['rf_trees'], 
+                    seed=42
+                )
+            elif p['model_choice'] == "Support Vector Machine (SVM)":
+                classifier_inst = ee.Classifier.libsvm(
+                    kernelType=p['svm_kernel'], 
+                    gamma=p['svm_gamma'], 
+                    cost=10
+                )
+            elif p['model_choice'] == "Gradient Tree Boost":
+                classifier_inst = ee.Classifier.smileGradientTreeBoost(
+                    numberOfTrees=p['gtb_trees'], 
+                    shrinkage=0.005, 
+                    samplingRate=0.7, 
+                    seed=42
+                )
+            elif p['model_choice'] == "CART (Decision Tree)":
+                classifier_inst = ee.Classifier.smileCart()
+            elif p['model_choice'] == "Naive Bayes":
+                classifier_inst = ee.Classifier.smileNaiveBayes()
+
+            # Train & Classify
+            trained_classifier = classifier_inst.train(
                 features=training_fc,
                 classProperty="class",
                 inputProperties=input_bands
             )
             
-            lulc_class = indices_img.select(input_bands).classify(classifier)
+            lulc_class = indices_img.select(input_bands).classify(trained_classifier)
 
             # 4. VISUALIZATION
             lulc_palette = ["#1A5E1A", "#387C2B", "#BDB76B", "#98FB98", "#FFD700", "#DC143C", "#D2691E", "#0000FF", "#008080", "#FFFFFF"]
@@ -599,16 +645,21 @@ else:
             with col_res:
                 st.markdown('<div class="glass-card">', unsafe_allow_html=True)
                 st.markdown('<div class="card-label">🧠 MODEL METRICS</div>', unsafe_allow_html=True)
-                st.success("Training Source: Connected")
-                st.info(f"Points Processed: {len(df)}")
-                st.info(f"Trees: {p['n_trees']}")
+                st.success(f"Architecture: {p['model_choice']}")
+                st.info(f"Training Points: {len(df)}")
+                
+                # Display specific metrics
+                if p['model_choice'] == "Random Forest":
+                    st.text(f"Trees: {p['rf_trees']}")
+                elif p['model_choice'] == "SVM":
+                    st.text(f"Kernel: {p['svm_kernel']}")
                 
                 st.markdown("---")
                 st.markdown('<div class="card-label">💾 EXPORT RESULT</div>', unsafe_allow_html=True)
                 
                 if st.button("☁️ Save to Drive"):
                         ee.batch.Export.image.toDrive(
-                        image=lulc_class, description=f"LULC_{datetime.now().strftime('%Y%m%d')}", 
+                        image=lulc_class, description=f"LULC_{p['model_choice']}_{datetime.now().strftime('%Y%m%d')}", 
                         scale=10, region=roi, folder='GEE_Exports'
                     ).start()
                         st.toast("Export Started to GDrive")
@@ -623,11 +674,9 @@ else:
                 m.addLayer(s2_median, rgb_vis, 'RGB Composite')
                 
                 # Add LULC
-                m.addLayer(lulc_class, {"min": 0, "max": 9, "palette": lulc_palette}, "LULC Classification")
+                m.addLayer(lulc_class, {"min": 0, "max": 9, "palette": lulc_palette}, f"LULC: {p['model_choice']}")
                 
                 # Legend
                 legend_dict = dict(zip(class_names, lulc_palette))
                 m.add_legend(title="LULC Classes", legend_dict=legend_dict)
                 m.to_streamlit()
-
-
