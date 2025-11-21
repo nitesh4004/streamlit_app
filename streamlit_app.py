@@ -191,7 +191,6 @@ def rename_landsat_bands(img):
     )
 
 def compute_index(img, platform, index, formula=None):
-    # (Logic from original code for spectral indices)
     if platform == "Sentinel-2 (Optical)":
         if index == '🛠️ Custom (Band Math)':
             map_b = {
@@ -328,6 +327,9 @@ with st.sidebar:
     st.markdown("---")
     
     # --- MODE SPECIFIC SETTINGS ---
+    # Initializing variables to avoid NameErrors
+    n_trees = 200
+    
     if mode == "Spectral Monitor":
         st.markdown("### 2. Sensor Config")
         platform = st.selectbox("Satellite Network", [
@@ -382,29 +384,15 @@ with st.sidebar:
             "Greyscale": ['black', 'white']
         }
         cur_palette = pal_map.get(pal_name, pal_map["Red-Yellow-Green"])
-        
-        # Initialize these to None to avoid errors in param packing later
-        uploaded_train = None
-        gh_url = None
-        data_source = None
-        n_trees = None
 
     else: # LULC MODE
-        st.markdown("### 2. ML Config")
-        data_source = st.radio("Training Data Source", ["GitHub URL", "Upload CSV"], label_visibility="collapsed")
+        # AUTOMATIC DATA CONFIG - NO USER INPUT NEEDED
+        st.markdown("### 2. System Config")
+        st.info("🧠 Neural Net: Random Forest")
+        st.success("📁 Training Data: Auto-Loaded (Ni30_Repo)")
         
-        uploaded_train = None
-        gh_url = None
-        
-        if data_source == "GitHub URL":
-            gh_url = st.text_input("Paste Raw GitHub URL", 
-                                   placeholder="https://raw.githubusercontent.com/user/repo/main/data.csv",
-                                   help="Make sure to click 'Raw' on GitHub and copy that URL.")
-        else:
-            uploaded_train = st.file_uploader("Training Data (CSV)", type=['csv'], help="Must contain 'LULC_Type' column")
-        
-        st.markdown("#### Model Params")
-        n_trees = st.slider("Random Forest Trees", 50, 300, 200)
+        st.markdown("#### Model Tuning")
+        n_trees = st.slider("RF Trees", 50, 300, 200)
         cloud = st.slider("Cloud Masking %", 0, 30, 20)
 
     st.markdown("---")
@@ -420,20 +408,14 @@ with st.sidebar:
                 'calculated': True, 
                 'start': start.strftime("%Y-%m-%d"), 
                 'end': end.strftime("%Y-%m-%d"),
-                'cloud': cloud
+                'cloud': cloud,
+                'n_trees': n_trees # Pass this globally
             }
             
             if mode == "Spectral Monitor":
                 params.update({
                     'platform': platform, 'idx': idx, 'formula': formula, 
                     'orbit': orbit, 'vmin': vmin, 'vmax': vmax, 'palette': cur_palette
-                })
-            else:
-                params.update({
-                    'uploaded_train': uploaded_train, 
-                    'gh_url': gh_url,
-                    'data_source': data_source,
-                    'n_trees': n_trees
                 })
                 
             st.session_state.update(params)
@@ -474,7 +456,7 @@ else:
     p = st.session_state
     
     # ==========================================
-    # MODE 1: SPECTRAL MONITOR (EXISTING LOGIC)
+    # MODE 1: SPECTRAL MONITOR
     # ==========================================
     if p['mode'] == "Spectral Monitor":
         with st.spinner("🛰️ Establishing Uplink... Processing Earth Engine Data..."):
@@ -550,119 +532,100 @@ else:
                 m.to_streamlit()
 
     # ==========================================
-    # MODE 2: LULC CLASSIFIER (UPDATED GITHUB LOGIC)
+    # MODE 2: LULC CLASSIFIER (AUTO-GITHUB)
     # ==========================================
     elif p['mode'] == "LULC Classifier":
         
-        # Logic to determine source
-        df = None
-        data_loaded = False
+        # HARDCODED DATASET URL
+        DEFAULT_TRAIN_URL = "https://raw.githubusercontent.com/nitesh4004/Geospatial-Ni30/main/lulc_spectral_indices_10000.csv"
         
-        if p['data_source'] == "GitHub URL":
-            if p['gh_url']:
-                try:
-                    # Auto-fix for common mistake: using 'blob' instead of 'raw'
-                    clean_url = p['gh_url'].replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/")
-                    df = pd.read_csv(clean_url)
-                    data_loaded = True
-                except Exception as e:
-                    st.error(f"❌ Could not fetch from GitHub: {e}. Ensure the repo is public and URL is correct.")
-            else:
-                st.warning("⚠️ Please paste the GitHub URL in the sidebar.")
+        with st.spinner("🧠 Fetching Training Data & Initializing AI Model..."):
+            # 1. LOAD TRAINING DATA AUTOMATICALLY
+            try:
+                df = pd.read_csv(DEFAULT_TRAIN_URL)
                 
-        elif p['data_source'] == "Upload CSV":
-            if p['uploaded_train']:
-                df = pd.read_csv(p['uploaded_train'])
-                data_loaded = True
-            else:
-                st.warning("⚠️ Please upload a CSV file in the sidebar.")
-
-        if data_loaded and df is not None:
-            with st.spinner("🧠 Training Random Forest Model..."):
-                # 1. PROCESS TRAINING DATA
-                try:
-                    class_names = [
-                        "Dense Forest", "Open Forest", "Shrubland", "Grassland",
-                        "Cropland", "Urban/Built-up", "Bare Soil", "Water Bodies",
-                        "Wetland", "Snow/Ice",
-                    ]
-                    class_lut = dict(zip(class_names, range(len(class_names))))
-                    
-                    if "class" not in df.columns:
-                         df["class"] = df["LULC_Type"].map(class_lut)
-                    df = df.dropna(subset=["class"])
-                    
-                    # Efficiently create features list
-                    features = [ee.Feature(None, row.to_dict()) for i, row in df.iterrows()]
-                    training_fc = ee.FeatureCollection(features)
-                    
-                except Exception as e:
-                    st.error(f"CSV Format Error: {e}")
-                    st.stop()
-
-                # 2. PREPARE SATELLITE DATA
-                s2_collection = (
-                    ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
-                    .filterBounds(roi)
-                    .filterDate(p['start'], p['end'])
-                    .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", p['cloud']))
-                    .map(mask_s2_clouds)
-                )
+                class_names = [
+                    "Dense Forest", "Open Forest", "Shrubland", "Grassland",
+                    "Cropland", "Urban/Built-up", "Bare Soil", "Water Bodies",
+                    "Wetland", "Snow/Ice",
+                ]
+                class_lut = dict(zip(class_names, range(len(class_names))))
                 
-                if s2_collection.size().getInfo() == 0:
-                    st.error("No clear images found in this date range.")
-                    st.stop()
-                    
-                s2_median = s2_collection.median().clip(roi)
-                indices_img = add_lulc_indices(s2_median)
-
-                # 3. TRAIN & CLASSIFY
-                input_bands = ["NDVI", "EVI", "GNDVI", "NDWI", "NDMI"]
-                classifier = ee.Classifier.smileRandomForest(
-                    numberOfTrees=p['n_trees'], seed=42
-                ).train(
-                    features=training_fc,
-                    classProperty="class",
-                    inputProperties=input_bands
-                )
+                if "class" not in df.columns:
+                        df["class"] = df["LULC_Type"].map(class_lut)
+                df = df.dropna(subset=["class"])
                 
-                lulc_class = indices_img.select(input_bands).classify(classifier)
-
-                # 4. VISUALIZATION
-                lulc_palette = ["#1A5E1A", "#387C2B", "#BDB76B", "#98FB98", "#FFD700", "#DC143C", "#D2691E", "#0000FF", "#008080", "#FFFFFF"]
+                # Efficiently create features list
+                features = [ee.Feature(None, row.to_dict()) for i, row in df.iterrows()]
+                training_fc = ee.FeatureCollection(features)
                 
-                col_map, col_res = st.columns([3, 1])
-                
-                with col_res:
-                    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-                    st.markdown('<div class="card-label">🧠 MODEL METRICS</div>', unsafe_allow_html=True)
-                    st.success(f"Source: {p['data_source']}")
-                    st.info(f"Training Points: {len(df)}")
-                    st.info(f"Trees: {p['n_trees']}")
-                    
-                    st.markdown("---")
-                    st.markdown('<div class="card-label">💾 EXPORT RESULT</div>', unsafe_allow_html=True)
-                    
-                    if st.button("☁️ Save to Drive"):
-                         ee.batch.Export.image.toDrive(
-                            image=lulc_class, description=f"LULC_{datetime.now().strftime('%Y%m%d')}", 
-                            scale=10, region=roi, folder='GEE_Exports'
-                        ).start()
-                         st.toast("Export Started to GDrive")
-                    st.markdown('</div>', unsafe_allow_html=True)
+            except Exception as e:
+                st.error(f"❌ Data Link Error: {e}. Please contact admin.")
+                st.stop()
 
-                with col_map:
-                    m = geemap.Map(height=700, basemap="HYBRID")
-                    m.centerObject(roi, 13)
-                    
-                    # Add RGB
-                    rgb_vis = {'min': 0, 'max': 0.3, 'bands': ['B4', 'B3', 'B2']}
-                    m.addLayer(s2_median, rgb_vis, 'RGB Composite')
-                    
-                    # Add LULC
-                    m.addLayer(lulc_class, {"min": 0, "max": 9, "palette": lulc_palette}, "LULC Classification")
-                    
-                    # Legend
-                    legend_dict = dict(zip(class_names, lulc_palette))
-                    m.add_legend(title="LULC Classes", legend_dict=legend_dict)
-                    m.to_streamlit()
+            # 2. PREPARE SATELLITE DATA
+            s2_collection = (
+                ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+                .filterBounds(roi)
+                .filterDate(p['start'], p['end'])
+                .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", p['cloud']))
+                .map(mask_s2_clouds)
+            )
+            
+            if s2_collection.size().getInfo() == 0:
+                st.error("No clear images found in this date range.")
+                st.stop()
+                
+            s2_median = s2_collection.median().clip(roi)
+            indices_img = add_lulc_indices(s2_median)
+
+            # 3. TRAIN & CLASSIFY
+            input_bands = ["NDVI", "EVI", "GNDVI", "NDWI", "NDMI"]
+            classifier = ee.Classifier.smileRandomForest(
+                numberOfTrees=p['n_trees'], seed=42
+            ).train(
+                features=training_fc,
+                classProperty="class",
+                inputProperties=input_bands
+            )
+            
+            lulc_class = indices_img.select(input_bands).classify(classifier)
+
+            # 4. VISUALIZATION
+            lulc_palette = ["#1A5E1A", "#387C2B", "#BDB76B", "#98FB98", "#FFD700", "#DC143C", "#D2691E", "#0000FF", "#008080", "#FFFFFF"]
+            
+            col_map, col_res = st.columns([3, 1])
+            
+            with col_res:
+                st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+                st.markdown('<div class="card-label">🧠 MODEL METRICS</div>', unsafe_allow_html=True)
+                st.success("Training Source: Connected")
+                st.info(f"Points Processed: {len(df)}")
+                st.info(f"Trees: {p['n_trees']}")
+                
+                st.markdown("---")
+                st.markdown('<div class="card-label">💾 EXPORT RESULT</div>', unsafe_allow_html=True)
+                
+                if st.button("☁️ Save to Drive"):
+                        ee.batch.Export.image.toDrive(
+                        image=lulc_class, description=f"LULC_{datetime.now().strftime('%Y%m%d')}", 
+                        scale=10, region=roi, folder='GEE_Exports'
+                    ).start()
+                        st.toast("Export Started to GDrive")
+                st.markdown('</div>', unsafe_allow_html=True)
+
+            with col_map:
+                m = geemap.Map(height=700, basemap="HYBRID")
+                m.centerObject(roi, 13)
+                
+                # Add RGB
+                rgb_vis = {'min': 0, 'max': 0.3, 'bands': ['B4', 'B3', 'B2']}
+                m.addLayer(s2_median, rgb_vis, 'RGB Composite')
+                
+                # Add LULC
+                m.addLayer(lulc_class, {"min": 0, "max": 9, "palette": lulc_palette}, "LULC Classification")
+                
+                # Legend
+                legend_dict = dict(zip(class_names, lulc_palette))
+                m.add_legend(title="LULC Classes", legend_dict=legend_dict)
+                m.to_streamlit()
