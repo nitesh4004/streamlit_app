@@ -12,6 +12,7 @@ from io import BytesIO
 from PIL import Image
 from datetime import datetime, timedelta
 import numpy as np
+import pandas as pd
 
 # --- 1. PAGE CONFIG ---
 st.set_page_config(
@@ -132,12 +133,6 @@ st.markdown("""
         padding-bottom: 5px;
     }
 
-    /* EXPANDER STYLE */
-    .streamlit-expanderHeader {
-        background-color: rgba(255,255,255,0.02) !important;
-        border-radius: 5px;
-    }
-    
     /* MAP CONTAINER */
     iframe {
         border-radius: 10px;
@@ -164,8 +159,9 @@ except Exception as e:
 if 'calculated' not in st.session_state: st.session_state['calculated'] = False
 if 'dates' not in st.session_state: st.session_state['dates'] = []
 if 'roi' not in st.session_state: st.session_state['roi'] = None
+if 'mode' not in st.session_state: st.session_state['mode'] = 'Spectral Monitor'
 
-# --- 4. FUNCTIONS (LOGIC PRESERVED) ---
+# --- 4. HELPER FUNCTIONS ---
 def parse_kml(content):
     try:
         if isinstance(content, bytes): content = content.decode('utf-8')
@@ -195,6 +191,7 @@ def rename_landsat_bands(img):
     )
 
 def compute_index(img, platform, index, formula=None):
+    # (Logic from original code for spectral indices)
     if platform == "Sentinel-2 (Optical)":
         if index == '🛠️ Custom (Band Math)':
             map_b = {
@@ -223,8 +220,34 @@ def compute_index(img, platform, index, formula=None):
         if index == 'VH/VV Ratio': return img.select('VH').subtract(img.select('VV')).rename('Ratio')
     return img.select(0)
 
+# --- LULC SPECIFIC FUNCTIONS ---
+def mask_s2_clouds(image):
+    qa = image.select('QA60')
+    cloud_bit_mask = 1 << 10
+    cirrus_bit_mask = 1 << 11
+    mask = qa.bitwiseAnd(cloud_bit_mask).eq(0) \
+        .And(qa.bitwiseAnd(cirrus_bit_mask).eq(0))
+    return image.updateMask(mask).divide(10000)
+
+def add_lulc_indices(image):
+    nir = image.select("B8")
+    red = image.select("B4")
+    green = image.select("B3")
+    blue = image.select("B2")
+    swir1 = image.select("B11")
+
+    ndvi = nir.subtract(red).divide(nir.add(red)).rename("NDVI")
+    gndvi = nir.subtract(green).divide(nir.add(green)).rename("GNDVI")
+    evi = image.expression(
+        "2.5 * ((NIR - RED) / (NIR + 6 * RED - 7.5 * BLUE + 1))",
+        {"NIR": nir, "RED": red, "BLUE": blue}
+    ).rename("EVI")
+    ndwi = green.subtract(nir).divide(green.add(nir)).rename("NDWI")
+    ndmi = nir.subtract(swir1).divide(nir.add(swir1)).rename("NDMI")
+    
+    return image.addBands([ndvi, evi, gndvi, ndwi, ndmi])
+
 def generate_static_map_display(image, roi, vis_params, title, cmap_colors):
-    # (Function logic preserved, styling adjusted for plots)
     thumb_url = image.getThumbURL({
         'min': vis_params['min'], 'max': vis_params['max'],
         'palette': vis_params['palette'], 'region': roi,
@@ -233,35 +256,23 @@ def generate_static_map_display(image, roi, vis_params, title, cmap_colors):
     response = requests.get(thumb_url)
     img_pil = Image.open(BytesIO(response.content))
     
-    coords = roi.bounds().getInfo()['coordinates'][0]
-    min_lon, min_lat = min(c[0] for c in coords), min(c[1] for c in coords)
-    max_lon, max_lat = max(c[0] for c in coords), max(c[1] for c in coords)
-    center_lat = (min_lat + max_lat) / 2
-    deg_to_m = 111320 * np.cos(np.radians(center_lat))
-    width_m = (max_lon - min_lon) * deg_to_m
-    
+    # Basic plot setup
     fig, ax = plt.subplots(figsize=(8, 8), dpi=600, facecolor='#050509')
     ax.set_facecolor('#050509')
     ax.imshow(img_pil)
     ax.axis('off')
-    ax.set_title(title, fontsize=14, fontweight='bold', pad=15, color='#00f2ff', fontname='Sans Serif')
+    ax.set_title(title, fontsize=14, fontweight='bold', pad=15, color='#00f2ff')
     
-    img_w_px = img_pil.width
-    scale_bar_m = width_m * 0.2
-    scale_text = f"{scale_bar_m/1000:.1f} km" if scale_bar_m > 1000 else f"{int(scale_bar_m)} m"
-    bar_x, bar_y = img_w_px * 0.05, img_pil.height * 0.95
-    ax.add_patch(Rectangle((bar_x, bar_y - 5), img_w_px * 0.2, 10, color='white'))
-    ax.text(bar_x + (img_w_px * 0.1), bar_y - 15, scale_text, ha='center', color='white', fontsize=10, weight='bold')
-
-    cmap = mcolors.LinearSegmentedColormap.from_list("custom", cmap_colors)
-    norm = mcolors.Normalize(vmin=vis_params['min'], vmax=vis_params['max'])
-    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-    sm.set_array([])
-    cax = fig.add_axes([0.92, 0.15, 0.03, 0.7])
-    cbar = plt.colorbar(sm, cax=cax)
-    cbar.set_label('Index Value', fontsize=10, color='white')
-    cbar.ax.yaxis.set_tick_params(color='white')
-    plt.setp(plt.getp(cbar.ax.axes, 'yticklabels'), color='white')
+    # Simplified colorbar logic for demo
+    if cmap_colors:
+        cmap = mcolors.LinearSegmentedColormap.from_list("custom", cmap_colors)
+        norm = mcolors.Normalize(vmin=vis_params['min'], vmax=vis_params['max'])
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+        sm.set_array([])
+        cax = fig.add_axes([0.92, 0.15, 0.03, 0.7])
+        cbar = plt.colorbar(sm, cax=cax)
+        cbar.ax.yaxis.set_tick_params(color='white')
+        plt.setp(plt.getp(cbar.ax.axes, 'yticklabels'), color='white')
     
     buf = BytesIO()
     plt.savefig(buf, format='jpg', bbox_inches='tight', facecolor='#050509')
@@ -277,6 +288,12 @@ with st.sidebar:
             <p style="font-size: 0.8rem; color: #00f2ff; letter-spacing: 2px; margin:0;">GEOSPATIAL CORE</p>
         </div>
     """, unsafe_allow_html=True)
+    
+    # MODE SELECTOR
+    mode = st.radio("System Mode", ["Spectral Monitor", "LULC Classifier"], index=0)
+    st.session_state['mode'] = mode
+
+    st.markdown("---")
     
     with st.container():
         st.markdown("### 1. Target Acquisition (ROI)")
@@ -306,12 +323,12 @@ with st.sidebar:
             if st.session_state['roi'] is None or new_roi.getInfo() != st.session_state['roi'].getInfo():
                 st.session_state['roi'] = new_roi
                 st.session_state['calculated'] = False
-                st.session_state['dates'] = []
                 st.toast("Target Locked: ROI Updated", icon="🎯")
 
     st.markdown("---")
     
-    with st.container():
+    # --- MODE SPECIFIC SETTINGS ---
+    if mode == "Spectral Monitor":
         st.markdown("### 2. Sensor Config")
         platform = st.selectbox("Satellite Network", [
             "Sentinel-2 (Optical)", "Landsat 9 (Optical)", "Landsat 8 (Optical)", "Sentinel-1 (Radar)"
@@ -357,14 +374,22 @@ with st.sidebar:
 
         pal_name = st.selectbox("Color Ramp", ["Red-Yellow-Green", "Blue-White-Green", "Magma", "Viridis", "Greyscale"], index=["Red-Yellow-Green", "Blue-White-Green", "Magma", "Viridis", "Greyscale"].index(pal_name))
         
-    pal_map = {
-        "Red-Yellow-Green": ['#d7191c', '#fdae61', '#ffffbf', '#a6d96a', '#1a9641'],
-        "Blue-White-Green": ['blue', 'white', 'green'],
-        "Magma": ['black', 'purple', 'orange', 'white'],
-        "Viridis": ['#440154', '#3b528b', '#21918c', '#5ec962', '#fde725'],
-        "Greyscale": ['black', 'white']
-    }
-    cur_palette = pal_map.get(pal_name, pal_map["Red-Yellow-Green"])
+        pal_map = {
+            "Red-Yellow-Green": ['#d7191c', '#fdae61', '#ffffbf', '#a6d96a', '#1a9641'],
+            "Blue-White-Green": ['blue', 'white', 'green'],
+            "Magma": ['black', 'purple', 'orange', 'white'],
+            "Viridis": ['#440154', '#3b528b', '#21918c', '#5ec962', '#fde725'],
+            "Greyscale": ['black', 'white']
+        }
+        cur_palette = pal_map.get(pal_name, pal_map["Red-Yellow-Green"])
+
+    else: # LULC MODE
+        st.markdown("### 2. ML Config")
+        uploaded_train = st.file_uploader("Training Data (CSV)", type=['csv'], help="Must contain 'LULC_Type' column")
+        
+        st.markdown("#### Model Params")
+        n_trees = st.slider("Random Forest Trees", 50, 300, 200)
+        cloud = st.slider("Cloud Masking %", 0, 30, 20)
 
     st.markdown("---")
     st.markdown("### 3. Temporal Window")
@@ -375,23 +400,32 @@ with st.sidebar:
     st.markdown("###")
     if st.button("INITIALIZE SCAN 🚀"):
         if st.session_state['roi']:
-            st.session_state.update({
-                'calculated': True, 'platform': platform, 'idx': idx, 
-                'start': start.strftime("%Y-%m-%d"), 'end': end.strftime("%Y-%m-%d"),
-                'cloud': cloud, 'formula': formula, 'orbit': orbit,
-                'vmin': vmin, 'vmax': vmax, 'palette': cur_palette
-            })
-            st.session_state['dates'] = []
+            params = {
+                'calculated': True, 
+                'start': start.strftime("%Y-%m-%d"), 
+                'end': end.strftime("%Y-%m-%d"),
+                'cloud': cloud
+            }
+            
+            if mode == "Spectral Monitor":
+                params.update({
+                    'platform': platform, 'idx': idx, 'formula': formula, 
+                    'orbit': orbit, 'vmin': vmin, 'vmax': vmax, 'palette': cur_palette
+                })
+            else:
+                params.update({'uploaded_train': uploaded_train, 'n_trees': n_trees})
+                
+            st.session_state.update(params)
+            st.session_state['dates'] = [] # Reset dates for new calculation
         else:
             st.error("❌ Error: ROI not defined.")
 
 # --- 6. MAIN CONTENT ---
-# Custom HUD Header
 st.markdown("""
 <div class="hud-header">
     <div>
         <div class="hud-title">NI30 ANALYTICS</div>
-        <div style="color:#94a3b8; font-size:0.9rem;">SATELLITE INTELLIGENCE DASHBOARD</div>
+        <div style="color:#94a3b8; font-size:0.9rem;">""" + st.session_state['mode'].upper() + """</div>
     </div>
     <div style="text-align:right;">
         <span class="hud-badge">SYSTEM ONLINE</span>
@@ -400,111 +434,192 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# --- DASHBOARD LOGIC ---
 if not st.session_state['calculated']:
-    # Welcome / Landing View
+    # Welcome View
     st.markdown("""
     <div class="glass-card" style="text-align:center; padding:40px;">
         <h2 style="color:#fff;">📡 WAITING FOR INPUT</h2>
         <p style="color:#94a3b8; margin-bottom:20px;">Configure the sensor parameters and region of interest in the sidebar panel.</p>
-        <div style="display:flex; justify-content:center; gap:20px; flex-wrap:wrap;">
-             <div style="background:rgba(255,255,255,0.05); padding:10px 20px; border-radius:5px;">1. Select Region</div>
-             <div style="background:rgba(255,255,255,0.05); padding:10px 20px; border-radius:5px;">2. Choose Sensor</div>
-             <div style="background:rgba(255,255,255,0.05); padding:10px 20px; border-radius:5px;">3. Initialize Scan</div>
-        </div>
     </div>
     """, unsafe_allow_html=True)
-
-    # Default Map
     m = geemap.Map(height=500, basemap="HYBRID")
     if st.session_state['roi']:
         m.centerObject(st.session_state['roi'], 12)
         m.addLayer(ee.Image().paint(st.session_state['roi'], 2, 3), {'palette': '#00f2ff'}, 'Target ROI')
-    
     m.to_streamlit()
 
 else:
-    # --- PROCESSING & RESULTS ---
     roi = st.session_state['roi']
     p = st.session_state
     
-    with st.spinner("🛰️ Establishing Uplink... Processing Earth Engine Data..."):
-        # (Processing Logic Identical to original, just wrapped)
-        if p['platform'] == "Sentinel-2 (Optical)":
-            col = (ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
-                   .filterBounds(roi).filterDate(p['start'], p['end'])
-                   .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', p['cloud'])))
-            processed = col.map(lambda img: img.addBands(compute_index(img, p['platform'], p['idx'], p['formula'])))
-        elif "Landsat" in p['platform']:
-            col_raw = ee.ImageCollection("LANDSAT/LC09/C02/T1_L2") if "Landsat 9" in p['platform'] else ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
-            col = (col_raw.filterBounds(roi).filterDate(p['start'], p['end'])
-                   .filter(ee.Filter.lt('CLOUD_COVER', p['cloud'])))
-            def process_landsat_step(img):
-                scaled = preprocess_landsat(img)
-                renamed = rename_landsat_bands(scaled)
-                return renamed.addBands(compute_index(renamed, p['platform'], p['idx'], p['formula']))
-            processed = col.map(process_landsat_step)
-        else:
-            col = (ee.ImageCollection('COPERNICUS/S1_GRD')
-                   .filterBounds(roi).filterDate(p['start'], p['end'])
-                   .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV')))
-            if p['orbit'] != "BOTH": col = col.filter(ee.Filter.eq('orbitProperties_pass', p['orbit']))
-            processed = col.map(lambda img: img.addBands(compute_index(img, p['platform'], p['idx'], p['formula'])))
-        
-        if not st.session_state['dates']:
-            cnt = processed.size().getInfo()
-            if cnt > 0:
-                dates_list = processed.aggregate_array('system:time_start').map(
-                    lambda t: ee.Date(t).format('YYYY-MM-dd')).distinct().sort()
-                st.session_state['dates'] = dates_list.slice(0, 50).getInfo()
+    # ==========================================
+    # MODE 1: SPECTRAL MONITOR (EXISTING LOGIC)
+    # ==========================================
+    if p['mode'] == "Spectral Monitor":
+        with st.spinner("🛰️ Establishing Uplink... Processing Earth Engine Data..."):
+            if p['platform'] == "Sentinel-2 (Optical)":
+                col = (ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+                       .filterBounds(roi).filterDate(p['start'], p['end'])
+                       .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', p['cloud'])))
+                processed = col.map(lambda img: img.addBands(compute_index(img, p['platform'], p['idx'], p['formula'])))
+            elif "Landsat" in p['platform']:
+                col_raw = ee.ImageCollection("LANDSAT/LC09/C02/T1_L2") if "Landsat 9" in p['platform'] else ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
+                col = (col_raw.filterBounds(roi).filterDate(p['start'], p['end'])
+                       .filter(ee.Filter.lt('CLOUD_COVER', p['cloud'])))
+                def process_landsat_step(img):
+                    scaled = preprocess_landsat(img)
+                    renamed = rename_landsat_bands(scaled)
+                    return renamed.addBands(compute_index(renamed, p['platform'], p['idx'], p['formula']))
+                processed = col.map(process_landsat_step)
             else:
-                st.error(f"⚠️ Signal Lost: No images found for parameters.")
-                st.session_state['calculated'] = False
+                col = (ee.ImageCollection('COPERNICUS/S1_GRD')
+                       .filterBounds(roi).filterDate(p['start'], p['end'])
+                       .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV')))
+                if p['orbit'] != "BOTH": col = col.filter(ee.Filter.eq('orbitProperties_pass', p['orbit']))
+                processed = col.map(lambda img: img.addBands(compute_index(img, p['platform'], p['idx'], p['formula'])))
+            
+            if not st.session_state['dates']:
+                cnt = processed.size().getInfo()
+                if cnt > 0:
+                    dates_list = processed.aggregate_array('system:time_start').map(
+                        lambda t: ee.Date(t).format('YYYY-MM-dd')).distinct().sort()
+                    st.session_state['dates'] = dates_list.slice(0, 50).getInfo()
+                else:
+                    st.error(f"⚠️ Signal Lost: No images found.")
+                    st.stop()
 
-    if st.session_state['dates']:
-        dates = st.session_state['dates']
-        
-        # --- UI LAYOUT FOR RESULTS ---
-        col_map, col_data = st.columns([3, 1])
-        
-        with col_data:
-            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-            st.markdown('<div class="card-label">📅 ACQUISITION DATE</div>', unsafe_allow_html=True)
-            sel_date = st.selectbox("Select Timestamp", dates, index=len(dates)-1, label_visibility="collapsed")
-            st.caption(f"{len(dates)} Scenes Available")
-            st.markdown('</div>', unsafe_allow_html=True)
+        if st.session_state['dates']:
+            dates = st.session_state['dates']
+            col_map, col_data = st.columns([3, 1])
+            
+            with col_data:
+                st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+                st.markdown('<div class="card-label">📅 ACQUISITION DATE</div>', unsafe_allow_html=True)
+                sel_date = st.selectbox("Select Timestamp", dates, index=len(dates)-1, label_visibility="collapsed")
+                st.caption(f"{len(dates)} Scenes Available")
+                st.markdown('</div>', unsafe_allow_html=True)
 
-            d_s = sel_date
-            d_e = (datetime.strptime(sel_date, "%Y-%m-%d") + timedelta(1)).strftime("%Y-%m-%d")
-            band = 'Custom' if 'Custom' in p['idx'] else p['idx'].split()[0]
-            if 'Ratio' in p['idx']: band = 'Ratio'
-            
-            final_img = processed.filterDate(d_s, d_e).select(band).median().clip(roi)
-            vis = {'min': p['vmin'], 'max': p['vmax'], 'palette': p['palette']}
-            
-            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-            st.markdown('<div class="card-label">💾 DATA EXPORT</div>', unsafe_allow_html=True)
-            try:
-                url = final_img.getDownloadURL({'scale': 30 if "Landsat" in p['platform'] else 10, 'region': roi, 'name': f"{band}_{sel_date}"})
-                st.markdown(f"<a href='{url}' style='color:#00f2ff; text-decoration:none;'>🔗 Download GeoTIFF</a>", unsafe_allow_html=True)
-            except: st.caption("Region too large for instant link.")
-            
-            st.markdown("---")
-            if st.button("☁️ Save to Drive", use_container_width=True):
-                ee.batch.Export.image.toDrive(image=final_img, description=f"{band}_{sel_date}", 
-                                              scale=30 if "Landsat" in p['platform'] else 10, region=roi, folder='GEE_Exports').start()
-                st.toast("Export Task Initiated")
-            
-            st.markdown("---")
-            if st.button("📷 Render Map (JPG)", use_container_width=True):
-                with st.spinner("Rendering..."):
-                    buf = generate_static_map_display(final_img, roi, vis, f"{p['idx']} | {sel_date}", p['palette'])
-                    st.download_button("⬇️ Save Image", buf, f"Ni30_Map_{sel_date}.jpg", "image/jpeg", use_container_width=True)
-            st.markdown('</div>', unsafe_allow_html=True)
+                d_s = sel_date
+                d_e = (datetime.strptime(sel_date, "%Y-%m-%d") + timedelta(1)).strftime("%Y-%m-%d")
+                band = 'Custom' if 'Custom' in p['idx'] else p['idx'].split()[0]
+                if 'Ratio' in p['idx']: band = 'Ratio'
+                
+                final_img = processed.filterDate(d_s, d_e).select(band).median().clip(roi)
+                vis = {'min': p['vmin'], 'max': p['vmax'], 'palette': p['palette']}
+                
+                st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+                st.markdown('<div class="card-label">💾 DATA EXPORT</div>', unsafe_allow_html=True)
+                try:
+                    url = final_img.getDownloadURL({'scale': 30 if "Landsat" in p['platform'] else 10, 'region': roi, 'name': f"{band}_{sel_date}"})
+                    st.markdown(f"<a href='{url}' style='color:#00f2ff; text-decoration:none;'>🔗 Download GeoTIFF</a>", unsafe_allow_html=True)
+                except: st.caption("Region too large for instant link.")
+                
+                st.markdown("---")
+                if st.button("📷 Render Map (JPG)", use_container_width=True):
+                    with st.spinner("Rendering..."):
+                        buf = generate_static_map_display(final_img, roi, vis, f"{p['idx']} | {sel_date}", p['palette'])
+                        st.download_button("⬇️ Save Image", buf, f"Ni30_Map_{sel_date}.jpg", "image/jpeg", use_container_width=True)
+                st.markdown('</div>', unsafe_allow_html=True)
 
-        with col_map:
-            m = geemap.Map(height=700, basemap="HYBRID")
-            m.centerObject(roi, 13)
-            m.addLayer(final_img, vis, f"{p['idx']} ({sel_date})")
-            m.add_colorbar(vis, label=p['idx'], layer_name="Legend")
-            m.to_streamlit()
+            with col_map:
+                m = geemap.Map(height=700, basemap="HYBRID")
+                m.centerObject(roi, 13)
+                m.addLayer(final_img, vis, f"{p['idx']} ({sel_date})")
+                m.add_colorbar(vis, label=p['idx'], layer_name="Legend")
+                m.to_streamlit()
+
+    # ==========================================
+    # MODE 2: LULC CLASSIFIER (NEW FEATURE)
+    # ==========================================
+    elif p['mode'] == "LULC Classifier":
+        if not p['uploaded_train']:
+            st.error("⚠️ Training Data Required. Please upload the CSV in the sidebar.")
+        else:
+            with st.spinner("🧠 Training Random Forest Model..."):
+                # 1. PROCESS TRAINING DATA
+                try:
+                    df = pd.read_csv(p['uploaded_train'])
+                    class_names = [
+                        "Dense Forest", "Open Forest", "Shrubland", "Grassland",
+                        "Cropland", "Urban/Built-up", "Bare Soil", "Water Bodies",
+                        "Wetland", "Snow/Ice",
+                    ]
+                    class_lut = dict(zip(class_names, range(len(class_names))))
+                    
+                    if "class" not in df.columns:
+                         df["class"] = df["LULC_Type"].map(class_lut)
+                    df = df.dropna(subset=["class"])
+                    
+                    # Efficiently create features list
+                    features = [ee.Feature(None, row.to_dict()) for i, row in df.iterrows()]
+                    training_fc = ee.FeatureCollection(features)
+                    
+                except Exception as e:
+                    st.error(f"CSV Format Error: {e}")
+                    st.stop()
+
+                # 2. PREPARE SATELLITE DATA
+                s2_collection = (
+                    ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+                    .filterBounds(roi)
+                    .filterDate(p['start'], p['end'])
+                    .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", p['cloud']))
+                    .map(mask_s2_clouds)
+                )
+                
+                if s2_collection.size().getInfo() == 0:
+                    st.error("No clear images found in this date range.")
+                    st.stop()
+                    
+                s2_median = s2_collection.median().clip(roi)
+                indices_img = add_lulc_indices(s2_median)
+
+                # 3. TRAIN & CLASSIFY
+                input_bands = ["NDVI", "EVI", "GNDVI", "NDWI", "NDMI"]
+                classifier = ee.Classifier.smileRandomForest(
+                    numberOfTrees=p['n_trees'], seed=42
+                ).train(
+                    features=training_fc,
+                    classProperty="class",
+                    inputProperties=input_bands
+                )
+                
+                lulc_class = indices_img.select(input_bands).classify(classifier)
+
+                # 4. VISUALIZATION
+                lulc_palette = ["#1A5E1A", "#387C2B", "#BDB76B", "#98FB98", "#FFD700", "#DC143C", "#D2691E", "#0000FF", "#008080", "#FFFFFF"]
+                
+                col_map, col_res = st.columns([3, 1])
+                
+                with col_res:
+                    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+                    st.markdown('<div class="card-label">🧠 MODEL METRICS</div>', unsafe_allow_html=True)
+                    st.info(f"Training Points: {len(df)}")
+                    st.info(f"Trees: {p['n_trees']}")
+                    
+                    st.markdown("---")
+                    st.markdown('<div class="card-label">💾 EXPORT RESULT</div>', unsafe_allow_html=True)
+                    
+                    if st.button("☁️ Save to Drive"):
+                         ee.batch.Export.image.toDrive(
+                            image=lulc_class, description=f"LULC_{datetime.now().strftime('%Y%m%d')}", 
+                            scale=10, region=roi, folder='GEE_Exports'
+                        ).start()
+                         st.toast("Export Started to GDrive")
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                with col_map:
+                    m = geemap.Map(height=700, basemap="HYBRID")
+                    m.centerObject(roi, 13)
+                    
+                    # Add RGB
+                    rgb_vis = {'min': 0, 'max': 0.3, 'bands': ['B4', 'B3', 'B2']}
+                    m.addLayer(s2_median, rgb_vis, 'RGB Composite')
+                    
+                    # Add LULC
+                    m.addLayer(lulc_class, {"min": 0, "max": 9, "palette": lulc_palette}, "LULC Classification")
+                    
+                    # Legend
+                    legend_dict = dict(zip(class_names, lulc_palette))
+                    m.add_legend(title="LULC Classes", legend_dict=legend_dict)
+                    m.to_streamlit()
